@@ -9,10 +9,9 @@ export class PrismaService
   async onModuleInit() {
     try {
       await this.$connect();
-
-      console.log('✅ MongoDB connected successfully');
+      console.log('MongoDB connected successfully');
     } catch (error) {
-      console.error('❌ Failed to connect to MongoDB');
+      console.error(' Failed to connect to MongoDB');
       console.error(error);
 
       throw error;
