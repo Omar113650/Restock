@@ -5,28 +5,34 @@ on:
     branches:
       - main
 
+  pull_request:
+    branches:
+      - main
+
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
-          node-version: 24
-          package-manager-cache: false
+          node-version: 22
 
       - name: Install dependencies
         working-directory: backend
         run: npm ci
 
-      - name: Generate Prisma Client
+      - name: Run tests
         working-directory: backend
-        run: npx prisma generate
+        run: npm test -- --runInBand
 
       - name: Build NestJS
         working-directory: backend
         run: npm run build
+
+      - name: Build Docker image
+        run: docker build -t restock-backend ./backend
