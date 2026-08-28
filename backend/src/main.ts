@@ -1,15 +1,22 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { AppModule } from './app.module';
+import { AppModule, ObserveInstrument } from './app.module';
+import helmet from 'helmet';
+import { doubleCsrf } from 'csrf-csrf';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, {
+    instrument: ObserveInstrument,
+  });
 
-  // Global prefix for all routes
   app.setGlobalPrefix('api');
 
-  // Global validation pipe — strip unknown props, transform types, throw on bad input
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: '1',
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
@@ -18,11 +25,14 @@ async function bootstrap() {
       transformOptions: { enableImplicitConversion: true },
     }),
   );
+  app.use(helmet());
 
-  // Enable CORS
-  app.enableCors();
+  app.enableCors({
+    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+    credentials: true,
+  });
 
-  // Swagger / OpenAPI setup
+  // swagger
   const config = new DocumentBuilder()
     .setTitle('Restock API')
     .setDescription(
@@ -32,7 +42,10 @@ async function bootstrap() {
     .addTag('Products', 'CRUD operations for products')
     .addTag('Batches', 'CRUD operations for product batches')
     .addTag('Customers', 'CRUD operations for customers')
-    .addTag('Rescue Offers', 'Manage rescue / discounted offers for expiring batches')
+    .addTag(
+      'Rescue Offers',
+      'Manage rescue / discounted offers for expiring batches',
+    )
     .addTag('Reservations', 'Customer reservations on rescue offers')
     .addTag('Orders', 'View and manage orders generated from reservations')
     .addTag('Notifications', 'Customer notification management')
@@ -44,28 +57,10 @@ async function bootstrap() {
   });
 
   await app.listen(process.env.PORT ?? 3000);
-  console.log(`🚀 Server running on http://localhost:${process.env.PORT ?? 3000}`);
-  console.log(`📖 Swagger UI: http://localhost:${process.env.PORT ?? 3000}/api/docs`);
+  console.log(`Server running on http://localhost:${process.env.PORT ?? 3000}`);
+  console.log(
+    `Swagger UI: http://localhost:${process.env.PORT ?? 3000}/api/docs`,
+  );
 }
 
 bootstrap();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

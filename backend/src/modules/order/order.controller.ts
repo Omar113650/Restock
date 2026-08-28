@@ -1,22 +1,35 @@
 import {
+  Body,
   Controller,
   Get,
   Param,
   Patch,
+  Post,
 } from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
   ApiParam,
   ApiResponse,
+  ApiBody,
 } from '@nestjs/swagger';
 import { OrderService } from './order.service';
 import { OrderStatus } from '@prisma/client';
+import { CreateOrderDto } from './dto/order.dto';
 
 @ApiTags('Orders')
 @Controller('orders')
 export class OrderController {
   constructor(private readonly orderService: OrderService) {}
+
+  @Post()
+  @ApiOperation({ summary: 'Create a new order from a reservation' })
+  @ApiBody({ type: CreateOrderDto })
+  @ApiResponse({ status: 201, description: 'Order created.' })
+  @ApiResponse({ status: 409, description: 'Order already exists.' })
+  async createOrder(@Body() createOrderDto: CreateOrderDto) {
+    return this.orderService.createOrder(createOrderDto);
+  }
 
   @Get()
   @ApiOperation({ summary: 'Get all orders' })

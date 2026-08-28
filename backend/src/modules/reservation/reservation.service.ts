@@ -62,7 +62,6 @@ export class ReservationService {
       ...(newQty === 0 && { status: OfferStatus.SOLD_OUT }),
     });
 
-    // Trigger Notification
     await this.notificationService.createNotification({
       recipientId: customerId,
       type: NotificationType.RESERVATION_CONFIRMED,
@@ -84,7 +83,6 @@ export class ReservationService {
       return JSON.parse(String(cachedReservations));
     }
 
-    console.log('CACHE MISS');
     const reservations = await this.reservationRepository.findAll();
 
     await this.redisService.set(
@@ -101,7 +99,6 @@ export class ReservationService {
     const cachedRes = await this.redisService.get(cacheKey);
 
     if (cachedRes) {
-      console.log('CACHE HIT');
       return JSON.parse(String(cachedRes));
     }
 

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+} from '@nestjs/common';
 import {
   ApiTags,
   ApiOperation,
@@ -17,12 +25,22 @@ export class ReservationController {
   @Post()
   @ApiOperation({
     summary: 'Create a new reservation',
-    description: 'Reserves units from a rescue offer for a customer. Reduces available quantity atomically.',
+    description:
+      'Reserves units from a rescue offer for a customer. Reduces available quantity atomically.',
   })
   @ApiBody({ type: CreateReservationDto })
-  @ApiResponse({ status: 201, description: 'Reservation created successfully.' })
-  @ApiResponse({ status: 400, description: 'Validation error or insufficient stock.' })
-  @ApiResponse({ status: 404, description: 'Rescue offer or customer not found.' })
+  @ApiResponse({
+    status: 201,
+    description: 'Reservation created successfully.',
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation error or insufficient stock.',
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Rescue offer or customer not found.',
+  })
   async createReservation(@Body() createReservationDto: CreateReservationDto) {
     return this.reservationService.createReservation(createReservationDto);
   }
@@ -38,9 +56,13 @@ export class ReservationController {
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Manually trigger expired-reservation cleanup',
-    description: 'Runs the expiry job on-demand (normally executed by the scheduler). Marks stale reservations as EXPIRED and restores stock.',
+    description:
+      'Runs the expiry job on-demand (normally executed by the scheduler). Marks stale reservations as EXPIRED and restores stock.',
   })
-  @ApiResponse({ status: 200, description: 'Expiry job executed successfully.' })
+  @ApiResponse({
+    status: 200,
+    description: 'Expiry job executed successfully.',
+  })
   async triggerExpiry() {
     return this.reservationService.handleExpiredReservations();
   }
