@@ -1,0 +1,169 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum RiskLevel {
+  NORMAL
+  AT_RISK
+  URGENT
+}
+
+enum OfferStatus {
+  ACTIVE
+  SOLD_OUT
+  EXPIRED
+}
+
+enum ReservationStatus {
+  RESERVED
+  PAID
+  EXPIRED
+}
+
+enum OrderStatus {
+  PAID
+  PICKED_UP
+}
+
+enum NotificationType {
+  RESERVATION_CONFIRMED
+  PAYMENT_SUCCESS
+  READY_FOR_PICKUP
+  BATCH_URGENT
+}
+
+model Product {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  name      String
+  unit      String
+  batches   Batch[]
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("products")
+}
+
+model Batch {
+  id        String  @id @default(auto()) @map("_id") @db.ObjectId
+  productId String  @map("product_id") @db.ObjectId
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity   Int
+  expiryDate DateTime  @map("expiry_date")
+  riskLevel  RiskLevel @default(NORMAL) @map("risk_level")
+
+  rescueOffers  RescueOffer[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([productId])
+  @@index([expiryDate])
+  @@index([riskLevel])
+  @@index([riskLevel, expiryDate])
+  @@map("batches")
+}
+
+model RescueOffer {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  batchId String @map("batch_id") @db.ObjectId
+  batch   Batch  @relation(fields: [batchId], references: [id])
+
+  originalPrice Int @map("original_price")
+  discountPrice Int @map("discount_price")
+
+  quantityAvailable Int         @map("quantity_available")
+  status            OfferStatus @default(ACTIVE)
+
+  reservations Reservation[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([batchId])
+  @@index([batchId, status])
+  @@index([status])
+  @@map("rescue_offers")
+}
+
+model Customer {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  name             String
+  phone            String   @unique
+  stripeCustomerId String?  @map("stripe_customer_id")
+
+  reservations  Reservation[]
+  notifications Notification[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("customers")
+}
+
+model Reservation {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  rescueOfferId String      @map("rescue_offer_id") @db.ObjectId
+  rescueOffer   RescueOffer @relation(fields: [rescueOfferId], references: [id])
+
+  customerId String   @map("customer_id") @db.ObjectId
+  customer   Customer @relation(fields: [customerId], references: [id])
+
+  quantity Int
+
+  status ReservationStatus @default(RESERVED)
+
+  order Order?
+
+  reservedAt DateTime @default(now()) @map("reserved_at")
+  expiresAt  DateTime @map("expires_at")
+
+  @@index([customerId])
+
+  @@index([rescueOfferId])
+  @@index([status])
+  @@index([status, expiresAt])
+  @@map("reservations")
+}
+
+model Order {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  reservationId String      @unique @map("reservation_id") @db.ObjectId
+  reservation   Reservation @relation(fields: [reservationId], references: [id])
+
+  totalAmount Int @map("total_amount")
+  status OrderStatus @default(PAID)
+  notifications Notification[]
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("orders")
+}
+
+model Notification {
+  id String @id @default(auto()) @map("_id") @db.ObjectId
+
+  recipientId String   @map("recipient_id") @db.ObjectId
+  recipient   Customer @relation(fields: [recipientId], references: [id])
+
+  type    NotificationType
+  message String
+
+  relatedOrderId String? @map("related_order_id") @db.ObjectId
+  relatedOrder   Order?  @relation(fields: [relatedOrderId], references: [id])
+
+  relatedBatchId String? @map("related_batch_id") @db.ObjectId
+  relatedBatch   Batch?  @relation(fields: [relatedBatchId], references: [id])
+
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([recipientId, isRead])
+  @@index([recipientId, createdAt])
+  @@index([recipientId, isRead, createdAt])
+  @@map("notifications")
+}
