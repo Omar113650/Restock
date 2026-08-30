@@ -20,6 +20,7 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
 const observeAppKey = process.env.OBSERVE_APP_KEY ?? '';
 const observeAppSecret = process.env.OBSERVE_APP_SECRET ?? '';
 
+
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),

@@ -1,9 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, VersioningType } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+// import helmet from 'helmet';
+
 import { AppModule, ObserveInstrument } from './app.module';
-import helmet from 'helmet';
-import { doubleCsrf } from 'csrf-csrf';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
@@ -22,17 +22,19 @@ async function bootstrap() {
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-      transformOptions: { enableImplicitConversion: true },
+      transformOptions: {
+        enableImplicitConversion: true,
+      },
     }),
   );
-  app.use(helmet());
 
-  app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:3000',
-    credentials: true,
-  });
+// app.use(helmet());
 
-  // swagger
+  // app.enableCors({
+  //   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  //   credentials: true,
+  // });
+
   const config = new DocumentBuilder()
     .setTitle('Restock API')
     .setDescription(
@@ -52,15 +54,20 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, config);
+
   SwaggerModule.setup('api/docs', app, document, {
-    swaggerOptions: { persistAuthorization: true },
+    swaggerOptions: {
+      persistAuthorization: true,
+    },
   });
 
-  await app.listen(process.env.PORT ?? 3000);
-  console.log(`Server running on http://localhost:${process.env.PORT ?? 3000}`);
-  console.log(
-    `Swagger UI: http://localhost:${process.env.PORT ?? 3000}/api/docs`,
-  );
+
+  const port = process.env.PORT ?? 3000;
+
+  await app.listen(port);
+
+  console.log(`Server running on http://localhost:${port}`);
+  console.log(`Swagger UI: http://localhost:${port}/api/docs`);
 }
 
 bootstrap();
