@@ -1,0 +1,275 @@
+# Restock
+
+نظام لإدارة **المخزون المهدد بفقدان قيمته بسبب الوقت** (منتجات قربت تنتهي صلاحيتها أو تفقد قيمتها) — بيحوّل الدفعات دي تلقائيًا لعروض بخصم ("Rescue Offers")، بيديرها في دورة حجز → دفع → استلام، وبيلغي الحجوزات اللي محدش دفعها تلقائيًا عشان يرجع المخزون للعرض تاني.
+
+الفكرة زي منصات مكافحة هدر الطعام (Too Good To Go) لكن الموديل عام — أي مخزون عنده كمية وتاريخ صلاحية/انتهاء ينفع يتدار بالنظام ده (طعام، أدوية، مستحضرات تجميل، منتجات موسمية...).
+
+---
+
+## جدول المحتويات
+
+- [التيك ستاك](#التيك-ستاك)
+- [بنية المشروع](#بنية-المشروع)
+- [موديل البيانات](#موديل-البيانات)
+- [دورة العمل الأساسية (Business Flow)](#دورة-العمل-الأساسية-business-flow)
+- [موديولات الباك إند](#موديولات-الباك-إند)
+- [التشغيل محليًا](#التشغيل-محليًا)
+- [متغيرات البيئة](#متغيرات-البيئة)
+- [Docker & Infrastructure](#docker--infrastructure)
+- [CI/CD](#cicd)
+- [توثيق الـ API](#توثيق-الـ-api)
+- [ملاحظات ومشاكل معروفة](#ملاحظات-ومشاكل-معروفة)
+
+---
+
+## التيك ستاك
+
+| الطبقة | التقنية |
+|---|---|
+| Backend | NestJS 11 (TypeScript) |
+| Frontend | Next.js 14 · React 18 · Tailwind CSS · Framer Motion |
+| Database | MongoDB (عن طريق Prisma ORM) |
+| Cache | Redis 7 (ioredis) — Cache-aside pattern |
+| Payments | Stripe (PaymentIntents + Webhooks) |
+| Realtime | Socket.IO (WebSocket Gateway) |
+| API Docs | Swagger / OpenAPI |
+| Containerization | Docker (multi-stage build) + Docker Compose |
+| Reverse Proxy | Nginx (rate limiting + routing) |
+| CI | GitHub Actions |
+| Observability | `@nestjs/observe` |
+
+---
+
+## بنية المشروع
+
+```
+Restock-master/
+├── backend/                  # NestJS API
+│   ├── src/
+│   │   ├── main.ts           # Bootstrap: Swagger, versioning, ValidationPipe
+│   │   ├── app.module.ts     # الموديول الرئيسي
+│   │   ├── core/
+│   │   │   ├── prisma/       # اتصال قاعدة البيانات (Global Module)
+│   │   │   └── redis/        # طبقة الـ caching (Global Module)
+│   │   └── modules/
+│   │       ├── product/
+│   │       ├── batch/
+│   │       ├── customer/
+│   │       ├── rescue-offer/
+│   │       ├── reservation/
+│   │       ├── order/
+│   │       ├── notification/
+│   │       └── payment/
+│   └── prisma/
+│       ├── schema.prisma
+│       └── migrations/
+├── frontend/                 # Next.js app
+│   └── src/app/
+│       ├── shop/              # واجهة العميل — تصفح العروض
+│       ├── my-orders/
+│       ├── reservations/
+│       ├── checkout/[reservationId]/
+│       ├── products/, batches/, rescue-offers/, customers/, orders/  # واجهة الإدارة
+├── nginx/
+│   └── nginx.conf
+├── .github/workflows/
+│   └── ci-cd.yml
+├── Dockerfile                 # يبني الباك إند (multi-stage)
+└── docker-compose.yml          # app + redis + nginx
+```
+
+كل موديول باك إند بيتبع نفس الـ pattern:
+```
+module/
+├── module.controller.ts       # الـ HTTP routes
+├── module.service.ts          # منطق العمل (business logic)
+├── module.module.ts           # تجميع الـ providers
+├── dto/                        # Data Transfer Objects + validation
+├── interfaces/                 # عقد الـ Repository (Dependency Inversion)
+└── repositories/                # تنفيذ الـ Repository بـ Prisma
+```
+
+النمط ده (Repository Pattern + DI) بيخلي كل موديول قابل للاختبار بمعزل عن قاعدة البيانات، وسهل تغيير الـ ORM/الداتابيز مستقبلًا من غير ما تلمس منطق الـ service.
+
+---
+
+## موديل البيانات
+
+```
+Product (اسم، وحدة قياس)
+   └── Batch (كمية، تاريخ انتهاء، مستوى خطورة: NORMAL / AT_RISK / URGENT)
+          └── RescueOffer (سعر أصلي، سعر مخفّض، الكمية المتاحة، الحالة: ACTIVE / SOLD_OUT / EXPIRED)
+                 └── Reservation (كمية محجوزة، وقت انتهاء الحجز، الحالة: RESERVED / PAID / EXPIRED)
+                        └── Order (المبلغ الكلي، الحالة: PAID / PICKED_UP)
+
+Customer (اسم، تليفون، Stripe Customer ID)
+   ├── Reservation[]
+   └── Notification[]  (RESERVATION_CONFIRMED / PAYMENT_SUCCESS / READY_FOR_PICKUP / BATCH_URGENT)
+```
+
+قاعدة البيانات MongoDB عن طريق Prisma، وكل الـ IDs من نوع `ObjectId`.
+
+---
+
+## دورة العمل الأساسية (Business Flow)
+
+1. **Product** → صنف عام للمنتج
+2. **Batch** → دفعة فعلية من المنتج، ليها تاريخ انتهاء ومستوى خطورة
+3. لما دفعة تقرب من الانتهاء → يتعمل ليها **RescueOffer** (سعر مخفّض + كمية متاحة)
+4. العميل يشوف العروض النشطة (`GET /rescue-offers/active`) ويعمل **Reservation** — الحجز بيقلل الكمية المتاحة فورًا وبيفضل صالح لمدة محدودة (افتراضيًا 15 دقيقة)
+5. لو دفع خلال المدة (عبر Stripe) → الحجز يتحول لـ **Order** مدفوع، وبيتبعت **Notification** لحظي عبر WebSocket
+6. لو الوقت خلص من غير دفع → **Scheduler** بيشتغل دوريًا (كل دقيقة)، يحوّل الحجز لـ `EXPIRED`، ويرجّع الكمية للعرض عشان عميل تاني ياخدها. ممكن كمان تشغيل التنظيف يدويًا عبر `POST /reservations/trigger-expiry`
+7. المحل بيسلّم المنتج، ويحدّث حالة الـ Order لـ `PICKED_UP` عبر `PATCH /orders/:id/pickup`
+
+---
+
+## موديولات الباك إند
+
+| الموديول | المسؤولية | ملاحظات |
+|---|---|---|
+| **product** | CRUD للمنتجات، يمنع تكرار الاسم | Cache 60 ثانية على `findAll`/`findOne` |
+| **batch** | CRUD للدفعات، مرتبطة بـ Product | `riskLevel` بييجي من الـ client حاليًا، مش محسوب تلقائيًا |
+| **customer** | CRUD للعملاء، التليفون Unique Key | مفيش auth/password |
+| **rescue-offer** | إنشاء/إدارة عروض الإنقاذ، فيه `GET /rescue-offers/active` | بيتحقق من وجود الـ Batch قبل الإنشاء |
+| **reservation** | إنشاء الحجوزات، خصم الكمية، تشغيل الإشعارات، وفيه Scheduler لتنظيف الحجوزات المنتهية | `POST /reservations/trigger-expiry` لتشغيل يدوي |
+| **order** | تحويل الحجز المدفوع لطلب، تتبع حالة الاستلام | |
+| **notification** | CRUD للإشعارات + WebSocket Gateway (namespace `/notifications`) للبث اللحظي | نظام Rooms لكل مستخدم (`user_<id>`) |
+| **payment** | تكامل Stripe كامل (Customers، PaymentMethods، PaymentIntents، Webhooks) | **الموديول متعطل حاليًا** — غير مستورد في `app.module.ts` |
+
+---
+
+## التشغيل محليًا
+
+### المتطلبات
+- Node.js 20+
+- MongoDB (محلي أو Atlas)
+- Redis
+- Docker + Docker Compose (اختياري، للتشغيل المُحاوى)
+
+### الباك إند
+
+```bash
+cd backend
+npm install
+cp .env.example .env      # واملأ القيم المطلوبة
+npx prisma generate
+npm run start:dev
+```
+
+الـ API هيشتغل على `http://localhost:3000/api/v1`، وSwagger على `http://localhost:3000/api/docs`.
+
+### الفرونت إند
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+هيشتغل على `http://localhost:3000` افتراضيًا (Next.js) — لو الباك إند شغال على نفس البورت لازم تغيّر بورت واحد منهم.
+
+### عبر Docker Compose (الباك إند + Redis + Nginx فقط)
+
+```bash
+cp .env.example .env      # واملأ القيم المطلوبة
+docker compose up --build
+```
+
+الـ API هيبقى متاح عبر Nginx على `http://localhost:80/api`.
+
+> **ملحوظة:** الفرونت إند مش جزء من `docker-compose.yml` — لازم يتشغل/يتنشر بشكل منفصل.
+
+---
+
+## متغيرات البيئة
+
+من `backend/.env.example`:
+
+```env
+NODE_ENV=production
+PORT=3000
+
+DATABASE_URL=              # MongoDB connection string
+STRIPE_PUBLISHABLE_KEY=
+STRIPE_SECRET_KEY=
+```
+
+إضافة للمتغيرات اللي بيستخدمها `docker-compose.yml`:
+
+```env
+REDIS_HOST=redis
+REDIS_PORT=6379
+STRIPE_WEBHOOK_SECRET=
+OBSERVE_APP_KEY=
+OBSERVE_APP_SECRET=
+```
+
+---
+
+## Docker & Infrastructure
+
+### `Dockerfile` (Multi-stage)
+
+- **Stage 1 — builder** (`node:20-alpine`): `npm ci` → نسخ السورس → `npx prisma generate` → `npm run build` → فحص وجود `dist/main.js`.
+- **Stage 2 — production** (`node:20-alpine`): تثبيت production dependencies بس (`npm ci --omit=dev`) → `prisma generate` مرة تانية → نسخ الـ `dist` الجاهز من الـ builder → تشغيل `node dist/main`.
+
+الصورة النهائية بتحتوي فقط على الكود المُبني والـ dependencies اللازمة للتشغيل، من غير سورس TypeScript أو devDependencies.
+
+> يبني الباك إند فقط. مفيش Dockerfile للفرونت إند في المشروع.
+
+### `docker-compose.yml`
+
+3 خدمات على شبكة `bridge` واحدة (`restock`):
+
+| Service | Image/Build | ملاحظات |
+|---|---|---|
+| `app` | من الـ `Dockerfile` | Healthcheck على `/api/health`، مايشتغلش قبل ما Redis يبقى healthy |
+| `redis` | `redis:7-alpine` | Persistence بسيط (`--save 60 1`)، بيانات محفوظة في volume `redis_data` |
+| `nginx` | `nginx:alpine` | بوابة الدخول الوحيدة على بورت `80`، مايشتغلش قبل ما `app` يبقى healthy |
+
+### `nginx/nginx.conf`
+
+- Upstream: `app:3000`
+- Rate limiting: `30 req/s` لكل IP مع `burst=50` على `/api`
+- `/api/docs` → buffers أكبر (لـ Swagger JSON الكبيرة)
+- `/api/health` → متجاوز الـ rate limit ومطفي الـ access log
+- **مفيش TLS/SSL في الكونفيج** — الافتراض إن الـ HTTPS بيتحل في طبقة قدامها (Load Balancer / Cloudflare) لو في بيئة إنتاج فعلية
+
+---
+
+## CI/CD
+
+`.github/workflows/ci-cd.yml` — بيشتغل عند `push`/`pull_request` على `main`:
+
+1. Checkout
+2. Setup Node.js 22
+3. `npm ci` (جوه `backend/`)
+4. `npm test -- --runInBand`
+5. `npm run build`
+6. `docker build -t restock-backend ./backend`
+
+> فعليًا الـ pipeline ده **CI بس** — مفيش أي خطوة نشر (push للصورة على registry أو deploy لسيرفر). الفرونت إند مش داخل في الـ workflow خالص.
+
+---
+
+## توثيق الـ API
+
+Swagger UI متاح على `/api/docs` بعد تشغيل السيرفر، وبيغطي الـ tags التالية:
+`Products` · `Batches` · `Customers` · `Rescue Offers` · `Reservations` · `Orders` · `Notifications`.
+
+الـ health check endpoint: `GET /api/health`.
+
+---
+
+## ملاحظات ومشاكل معروفة
+
+هذه ملاحظات حقيقية موجودة في الكود الحالي، لازم الأخذ بها في الاعتبار قبل أي نشر فعلي:
+
+- **موديول الدفع (Payment) متعطل**: مُعلّق بالكومنت في `app.module.ts`، رغم إن الكود جاهز بالكامل (Stripe integration + webhooks).
+- **مفيش Authentication حقيقي**: مفيش JWT/Passport/bcrypt، والـ Customer model مالهاش password. أي حد يعرف الـ ID/التليفون يقدر يعمل عمليات باسم عميل تاني.
+- **`POST /orders` بياخد `totalAmount` من الـ client مباشرة**: بدون ربط إجباري بمبلغ الحجز الفعلي، وده مخاطرة أمنية طالما الـ payment module معطل ومفيش طبقة تتحقق من المبلغ.
+- **باج في CI**: خطوة `docker build -t restock-backend ./backend` بتحدد الـ context كـ `backend/`، لكن الـ Dockerfile الفعلي في الروت ومكتوب على أساس إن الـ context هو الروت. الأمر الصحيح: `docker build -t restock-backend -f Dockerfile .`
+- **`config/DB.config.ts`**: ملف كود ميت (PostgreSQL config) مش متسجل في أي مكان، والمشروع فعليًا شغال بـ MongoDB.
+- **Migration غير مرتبط بالمشروع**: `prisma/migrations/20260702211411_add_avatar_public_id/migration.sql` يحتوي schema كامل لمشروع تاني (منصة صيانة سيارات)، غير متعلق بـ Restock إطلاقًا — الأرجح غلطة نسخ/لصق.
+- **CORS و Helmet متعطلين** في `main.ts` (مكتوبين بس Commented).
+- **الفرونت إند غير مدمج في Docker/CI/CD** خالص — لازم بنية نشر منفصلة له.
